@@ -96,7 +96,7 @@ public class VoiceServerThread extends Thread implements IServerThread {
                 outputStream.flush();
 
                 // voice packet handler loop
-                Helper.broadcastLoop(parent, this, inputStream, TAG);
+                Helper.broadcastLoop(inputStream, TAG);
             } catch (Throwable t) {
                 shouldNotReport =
                         (t instanceof SocketException && Thread.currentThread().isInterrupted());
@@ -113,6 +113,11 @@ public class VoiceServerThread extends Thread implements IServerThread {
                     }
                 }
             }
+        }
+
+        @Override
+        public IServerThread getParent() {
+            return parent;
         }
 
         @Override

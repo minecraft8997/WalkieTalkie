@@ -2,6 +2,7 @@ package ru.deewend.walkietalkie;
 
 import java.util.Objects;
 
+@SuppressWarnings("unused")
 public class InterruptibleResourceHolder<T extends AutoCloseable> {
     private volatile boolean allowedToSet = true;
     private volatile T resource;

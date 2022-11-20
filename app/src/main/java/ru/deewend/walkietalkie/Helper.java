@@ -2,12 +2,14 @@ package ru.deewend.walkietalkie;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.location.Location;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
 import java.io.DataInputStream;
 import java.io.IOException;
+import java.util.List;
 import java.util.Objects;
 
 import ru.deewend.walkietalkie.thread.IClientThread;
@@ -53,16 +55,15 @@ public class Helper {
     public static void startActivity(Activity from, Class<? extends Activity> clazz) {
         Intent intent = new Intent(from, clazz);
         from.startActivity(intent);
-        //from.overridePendingTransition(0, 0);
+        from.overridePendingTransition(0, 0);
     }
 
     @SuppressWarnings("InfiniteLoopStatement")
     public static void broadcastLoop(
-            IServerThread parent,
-            IClientThread currentThread,
             DataInputStream inputStream,
             String logTag
     ) throws IOException {
+        IClientThread currentThread = (IClientThread) Thread.currentThread();
         while (true) {
             byte first = inputStream.readByte();
             int available = inputStream.available();
@@ -70,23 +71,54 @@ public class Helper {
             packet[0] = first;
             //noinspection ResultOfMethodCallIgnored
             inputStream.read(packet, 1, available);
-            Log.w("Some server", "Received packet for broadcasting!");
 
-            //noinspection SynchronizationOnLocalVariableOrMethodParameter
-            synchronized (parent) {
-                for (IClientThread clientThread : parent.getActiveConnections()) {
-                    if (clientThread == currentThread || !clientThread.isLoggedIn()) continue;
+            broadcastPacket(currentThread, true, packet, logTag);
+        }
+    }
 
-                    try {
-                        clientThread.getOutputStream().write(packet);
-                        clientThread.getOutputStream().flush();
-                    } catch (IOException e) {
-                        Log.w(logTag, "An IOException " +
-                                "occurred while sending a voice packet", e);
-                    }
+    public static void broadcastPacket(
+            IClientThread currentThread, boolean exclude, byte[] packet, String logTag
+    ) {
+        IServerThread parent = currentThread.getParent();
+        //noinspection SynchronizationOnLocalVariableOrMethodParameter
+        synchronized (parent) {
+            for (IClientThread clientThread : parent.getActiveConnections()) {
+                if ((exclude && clientThread == currentThread) || !clientThread.isLoggedIn()) {
+                    continue;
+                }
+                try {
+                    clientThread.getOutputStream().write(packet);
+                    clientThread.getOutputStream().flush();
+                } catch (IOException e) {
+                    Log.w(logTag, "An IOException occurred while sending a packet", e);
                 }
             }
         }
+    }
+
+    /*
+     * It's highly recommended (however not required) to call this method
+     * in UI thread as field "WalkieTalkie.WTLocationListener.currentLocation"
+     * it uses is not volatile (for optimization purposes) so the method can return
+     * outdated information.
+     */
+    public static String getDistance(Location to) {
+        if (to == null) return "NaN";
+        if (to.getLatitude() == 0 && to.getLongitude() == 0) return "NaN";
+        Location currentLocation = WalkieTalkie.WTLocationListener.getCurrentLocation();
+        if (currentLocation == null) return "NaN";
+        if (currentLocation.getLatitude() == 0 && currentLocation.getLongitude() == 0) return "NaN";
+
+        return String.valueOf((int) currentLocation.distanceTo(to));
+    }
+
+    public static String join(List<String> list) {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < list.size(); i++) {
+            builder.append(list.get(i)).append((i < list.size() - 1) ? ", " : "");
+        }
+
+        return builder.toString();
     }
 
     /*

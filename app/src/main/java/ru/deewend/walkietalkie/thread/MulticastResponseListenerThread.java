@@ -49,20 +49,24 @@ public class MulticastResponseListenerThread extends Thread {
         } catch (Throwable t) {
             throwable = t;
         } finally {
-            parent.notifyComponentShutdown(this, throwable);
+            //noinspection StatementWithEmptyBody
+            if (throwable == null || (throwable instanceof SocketException && isInterrupted())) {
+                // yes this is a bad practice to leave "if" blocks empty :(
+                // but it looks much more readable imo
+            } else {
+                parent.notifyComponentShutdown(this, throwable);
+            }
         }
     }
 
-    private DatagramSocket instantiateSocket() throws SocketException, InterruptedException {
-        WalkieTalkieThread global;
-        if (parent.parent != null) {
-            global = parent.parent;
-        } else {
-            global = parent;
-        }
+    private WalkieTalkieThread findGlobalParent() {
+        return (parent.parent != null ? parent.parent : parent);
+    }
 
+    private DatagramSocket instantiateSocket() throws SocketException, InterruptedException {
         //noinspection ConstantConditions
-        return global.multicastResponseListener.set(new DatagramSocket(Helper.MULTICAST_PORT));
+        return findGlobalParent()
+                .multicastResponseListener.set(new DatagramSocket(Helper.MULTICAST_PORT));
     }
 
     public boolean receivedMagic() {
@@ -71,5 +75,17 @@ public class MulticastResponseListenerThread extends Thread {
 
     public InetAddress getInetAddressFrom() {
         return from;
+    }
+
+    @Override
+    public void interrupt() {
+        super.interrupt();
+
+        try {
+            //noinspection ConstantConditions
+            findGlobalParent().multicastResponseListener.interrupt();
+        } catch (Exception e) {
+            Log.w(TAG, "An exception occurred while closing multicastResponseListener", e);
+        }
     }
 }

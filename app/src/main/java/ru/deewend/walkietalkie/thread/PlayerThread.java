@@ -4,14 +4,11 @@ import android.media.AudioTrack;
 
 import java.io.DataInputStream;
 import java.io.IOException;
-import java.util.Arrays;
 
 import ru.deewend.walkietalkie.TalkingActivity;
 import ru.deewend.walkietalkie.WalkieTalkie;
 
 public class PlayerThread extends Thread {
-    //public static final String TAG = "PlayerThread";
-
     private final TalkingActivity talkingActivity;
     private final WalkieTalkieThread thread;
 
@@ -22,10 +19,11 @@ public class PlayerThread extends Thread {
 
     private void doLogic() throws IOException {
         AudioTrack audioTrack = talkingActivity.getAudioTrack();
-        int bufferSizeShorts = talkingActivity.getTalkingView().getAudioBufferSize() / 2;
+        int bufferSizeShorts = talkingActivity.getAudioBufferSize() / 2;
         short[] audioBuffer = new short[bufferSizeShorts];
 
         DataInputStream inputStream = thread.getVoiceServerInputStream();
+        //noinspection InfiniteLoopStatement
         while (true) {
             for (int i = 0; i < bufferSizeShorts; i++) {
                 audioBuffer[i] = inputStream.readShort();
@@ -43,6 +41,7 @@ public class PlayerThread extends Thread {
         } catch (Throwable t) {
             throwable = t;
         } finally {
+            talkingActivity.getAudioTrack().release();
             thread.notifyComponentShutdown(this, throwable);
         }
     }

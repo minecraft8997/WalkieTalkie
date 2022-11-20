@@ -5,21 +5,26 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.location.Location;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 
+import java.io.DataOutputStream;
+
 import ru.deewend.walkietalkie.thread.RecorderThread;
+import ru.deewend.walkietalkie.thread.WalkieTalkieThread;
 
 public class TalkingView extends View {
-    public static final int SAMPLE_RATE_HZ = 11025;
+    public static final String TAG = "TalkingView";
+    public static final int SAMPLE_RATE_HZ = 8000;
 
-    private TalkingActivity activity;
-    private AudioRecord audioRecord;
     private int audioBufferSize;
+    private AudioRecord audioRecord;
     private Paint paint;
     private volatile boolean recording;
     private float buttonX;
@@ -39,17 +44,16 @@ public class TalkingView extends View {
     }
 
     @SuppressLint("MissingPermission") // already checked permissions in MainActivity
-    public void initialize(TalkingActivity activity) {
-        this.activity = activity;
+    public void initialize() {
         this.audioBufferSize = AudioRecord.getMinBufferSize(
                 SAMPLE_RATE_HZ,
-                AudioFormat.CHANNEL_CONFIGURATION_MONO,
+                AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT
         );
         this.audioRecord = new AudioRecord(
                 MediaRecorder.AudioSource.MIC,
                 SAMPLE_RATE_HZ,
-                AudioFormat.CHANNEL_CONFIGURATION_MONO,
+                AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
                 audioBufferSize
         );
@@ -84,17 +88,64 @@ public class TalkingView extends View {
     }
 
     private void startRecording() {
-        System.out.println("Starting recording...");
-        //audioRecord.startRecording();
-        System.out.println("OK...");
         recording = true;
         invalidate();
+
+        double latitude;
+        double longitude;
+        Location currentLocation = WalkieTalkie.WTLocationListener.getCurrentLocation();
+        if (currentLocation != null) {
+            latitude = currentLocation.getLatitude();
+            longitude = currentLocation.getLongitude();
+        } else {
+            latitude = 0.0D;
+            longitude = 0.0D;
+        }
+
+        WalkieTalkieThread thread = WalkieTalkie.getInstance().getWTThread();
+        Thread senderThread = new Thread(() -> {
+            DataOutputStream stream = thread.getMainServerOutputStream();
+            try {
+                stream.write(0x00);
+                stream.writeUTF(thread.getUsername());
+                stream.writeDouble(latitude);
+                stream.writeDouble(longitude);
+                stream.flush();
+            } catch (Exception e) {
+                Log.w(TAG, "An exception occurred while sending location data", e);
+            }
+        });
+        senderThread.start();
+        while (senderThread.isAlive()) {
+            try {
+                senderThread.join();
+            } catch (InterruptedException ignored) {
+            }
+        }
     }
 
     private void stopRecording() {
         recording = false;
-        //audioRecord.stop();
         invalidate();
+
+        WalkieTalkieThread thread = WalkieTalkie.getInstance().getWTThread();
+        Thread senderThread = new Thread(() -> {
+            DataOutputStream stream = thread.getMainServerOutputStream();
+            try {
+                stream.write(0x02);
+                stream.writeUTF(thread.getUsername());
+                stream.flush();
+            } catch (Exception e) {
+                Log.w(TAG, "An exception occurred while sending recording finish packet", e);
+            }
+        });
+        senderThread.start();
+        while (senderThread.isAlive()) {
+            try {
+                senderThread.join();
+            } catch (InterruptedException ignored) {
+            }
+        }
     }
 
     @Override
@@ -108,7 +159,7 @@ public class TalkingView extends View {
         buttonX = width / 2.0f;
         buttonRadius = Math.min(width, height) / 3.0f;
         buttonY = (height - buttonRadius) - (height * 0.16f);
-        float shadeCircleY = buttonY * 1.056f;
+        float shadeCircleY = buttonY * 1.04f;
         if (recording) buttonY *= 1.024f;
         paint.setColor(Color.DKGRAY);
         canvas.drawCircle(buttonX, shadeCircleY, buttonRadius, paint);
@@ -116,16 +167,12 @@ public class TalkingView extends View {
         canvas.drawCircle(buttonX, buttonY, buttonRadius, paint);
     }
 
-    public TalkingActivity getActivity() {
-        return activity;
+    public int getAudioBufferSize() {
+        return audioBufferSize;
     }
 
     public AudioRecord getAudioRecord() {
         return audioRecord;
-    }
-
-    public int getAudioBufferSize() {
-        return audioBufferSize;
     }
 
     public boolean isRecording() {

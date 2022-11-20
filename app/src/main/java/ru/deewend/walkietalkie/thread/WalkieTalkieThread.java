@@ -1,9 +1,11 @@
 package ru.deewend.walkietalkie.thread;
 
 import android.app.Activity;
+import android.location.Location;
 import android.util.Log;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
@@ -23,6 +25,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import ru.deewend.walkietalkie.Helper;
 import ru.deewend.walkietalkie.InterruptibleResourceHolder;
@@ -106,11 +109,23 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
                         }
                     }
                 }
+                AtomicInteger verifiedOnline = parent.numberOfVerifiedConnectionsCached;
+                //noinspection ConstantConditions
+                verifiedOnline.incrementAndGet();
                 isLoggedIn = true;
                 outputStream.writeBoolean(true);
                 outputStream.flush();
+                {
+                    ByteArrayOutputStream packet = new ByteArrayOutputStream();
+                    DataOutputStream stream = new DataOutputStream(packet);
+                    stream.write(0x03);
+                    stream.writeInt(verifiedOnline.get());
+                    stream.flush();
+                    byte[] rawBytes = packet.toByteArray();
+                    Helper.broadcastPacket(this, false, rawBytes, TAG);
+                }
 
-                Helper.broadcastLoop(parent, this, inputStream, TAG);
+                Helper.broadcastLoop(inputStream, TAG);
             } catch (Throwable t) {
                 shouldNotReport =
                         (t instanceof SocketException && Thread.currentThread().isInterrupted());
@@ -119,6 +134,10 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
                             "IOException occurred while handling a client", t);
                 }
             } finally {
+                if (isLoggedIn) {
+                    //noinspection ConstantConditions
+                    parent.numberOfVerifiedConnectionsCached.decrementAndGet();
+                }
                 if (!shouldNotReport) {
                     parent.handleDisconnect(this);
                 } else {
@@ -128,6 +147,11 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
                     }
                 }
             }
+        }
+
+        @Override
+        public IServerThread getParent() {
+            return parent;
         }
 
         @Override
@@ -178,6 +202,7 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
     private volatile VoiceServerThread voiceServerThread;
     /* package-private */ final InterruptibleResourceHolder<ServerSocket> voiceServerSocket;
     /* package-private */ final List<IClientThread> activeConnections;
+    private final AtomicInteger numberOfVerifiedConnectionsCached;
     /* package-private */ final Map<String, byte[]> voiceServerPasswordMap;
     private volatile WalkieTalkieThread child;
 
@@ -190,10 +215,10 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
     private final InterruptibleResourceHolder<Socket> mainServerConnectionSocket;
     private final InterruptibleResourceHolder<Socket> voiceServerConnectionSocket;
 
+    private final Map<String, Location> speakerMap;
     private volatile DataOutputStream mainServerOutputStream;
     private volatile DataInputStream voiceServerInputStream;
     private volatile DataOutputStream voiceServerOutputStream;
-    private volatile boolean isReady;
 
     public WalkieTalkieThread(byte mode, String username, Activity currentActivity) {
         this.mode = mode;
@@ -203,16 +228,20 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
 
         if (mode == MODE_HOST_AND_CONNECT) {
             this.activeConnections = new ArrayList<>();
+            this.numberOfVerifiedConnectionsCached = new AtomicInteger();
             this.voiceServerPasswordMap = new HashMap<>();
             this.mainServerSocket = new InterruptibleResourceHolder<>();
             this.multicastSocket = new InterruptibleResourceHolder<>();
             this.voiceServerSocket = new InterruptibleResourceHolder<>();
+            this.speakerMap = null;
         } else {
             this.activeConnections = null;
+            this.numberOfVerifiedConnectionsCached = null;
             this.voiceServerPasswordMap = null;
             this.mainServerSocket = null;
             this.multicastSocket = null;
             this.voiceServerSocket = null;
+            this.speakerMap = new HashMap<>();
         }
         this.multicastResponseListener = new InterruptibleResourceHolder<>();
         this.mainServerConnectionSocket = new InterruptibleResourceHolder<>();
@@ -223,11 +252,13 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
         this.mode = MODE_CONNECT;
         this.username = parent.username;
         this.parent = parent;
+        this.speakerMap = new HashMap<>();
         this.multicastResponseListener = null;
         this.mainServerConnectionSocket = null;
         this.voiceServerConnectionSocket = null;
 
         this.activeConnections = null;
+        this.numberOfVerifiedConnectionsCached = null;
         this.voiceServerPasswordMap = null;
         this.mainServerSocket = null;
         this.multicastSocket = null;
@@ -235,8 +266,7 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
     }
 
     private void connect() throws Exception {
-        InetAddress hostAddress = InetAddress.getByName("192.168.1.216");//findHostAddress();
-        //hostAddress = findHostAddress();
+        InetAddress hostAddress = findHostAddress();
         if (hostAddress == null) {
             throw new IOException("Не удалось найти комнату в этой сети");
         }
@@ -312,7 +342,6 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
             }
 
             // we are now fully logged in! :)
-            isReady = true;
             Helper.scheduleUITask(() -> {
                 MainActivity activity = (MainActivity) getCurrentActivity();
                 activity.changeStateRecursive(true);
@@ -322,8 +351,54 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
             });
 
             while (true) {
-                Thread.sleep(10L);
+                int packetID = mainServerInputStream.read();
+                if (packetID == -1) break;
+                System.out.println("Pack " + packetID);
+                if (packetID == 0x00 || packetID == 0x01) { // StartSpeaking or LocationUpdate
+                    String currentSpeaker = mainServerInputStream.readUTF();
+                    double latitude = mainServerInputStream.readDouble();
+                    double longitude = mainServerInputStream.readDouble();
+                    Location location = new Location("Main Server (" + currentSpeaker + ")");
+                    location.setLatitude(latitude);
+                    location.setLongitude(longitude);
+
+                    Helper.scheduleUITask(() -> {
+                        //noinspection ConstantConditions
+                        speakerMap.put(currentSpeaker, location);
+
+                        notifySpeakerMapUpdated();
+                    });
+                } else if (packetID == 0x02) {
+                    String speaker = mainServerInputStream.readUTF();
+
+                    Helper.scheduleUITask(() -> {
+                        //noinspection ConstantConditions
+                        speakerMap.remove(speaker);
+
+                        notifySpeakerMapUpdated();
+                    });
+                } else if (packetID == 0x03) {
+                    int onlineVerified = mainServerInputStream.readInt();
+
+                    Helper.scheduleUITask(() -> {
+                        if (currentActivity instanceof TalkingActivity) {
+                            ((TalkingActivity) currentActivity)
+                                    .onNumberOfVerifiedConnectionsChanged(onlineVerified);
+                        }
+                    });
+                } else {
+                    throw new ProtocolException("Неизвестный ID " +
+                            "пакета. Возможно, данная версия приложения устарела");
+                }
             }
+        }
+    }
+
+    private void notifySpeakerMapUpdated() {
+        Helper.checkOnUIThread();
+
+        if (currentActivity instanceof TalkingActivity) {
+            ((TalkingActivity) currentActivity).onSpeakerMapUpdated();
         }
     }
 
@@ -384,9 +459,9 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
 
     private boolean sendMulticastPacket(byte[] buffer) {
         try (DatagramSocket socket = new DatagramSocket()) {
-            DatagramPacket responsePacket = new DatagramPacket(buffer, buffer.length,
+            DatagramPacket requestPacket = new DatagramPacket(buffer, buffer.length,
                     InetAddress.getByName(Helper.MULTICAST_ADDRESS), Helper.MULTICAST_PORT);
-            socket.send(responsePacket);
+            socket.send(requestPacket);
 
             return true;
         } catch (IOException e) {
@@ -503,18 +578,42 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
             if (activity instanceof MainActivity) {
                 ((MainActivity) activity).changeStateRecursive(true);
             } else {
-                System.out.println("SOMETHING SERIOUS!!!!!!!!!!");
                 Helper.startActivity(activity, MainActivity.class);
             }
         });
     }
 
+    public boolean hasChild() {
+        return (child != null);
+    }
+
+    public List<String> getSpeakerList() {
+        Helper.checkOnUIThread();
+
+        return new ArrayList<>((hasChild() ? child : this).speakerMap.keySet());
+    }
+
+    public Location getSpeakerLocation(String username) {
+        Helper.checkOnUIThread();
+
+        Map<String, Location> speakerMap = (hasChild() ? child : this).speakerMap;
+        if (!speakerMap.containsKey(username)) {
+            throw new IllegalArgumentException("Unknown username");
+        }
+
+        return speakerMap.get(username);
+    }
+
+    public DataOutputStream getMainServerOutputStream() {
+        return (hasChild() ? child : this).mainServerOutputStream;
+    }
+
     public DataInputStream getVoiceServerInputStream() {
-        return (child != null ? child : this).voiceServerInputStream;
+        return (hasChild() ? child : this).voiceServerInputStream;
     }
 
     public DataOutputStream getVoiceServerOutputStream() {
-        return (child != null ? child : this).voiceServerOutputStream;
+        return (hasChild() ? child : this).voiceServerOutputStream;
     }
 
     public void setActivity(Activity currentActivity) {
@@ -528,7 +627,7 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
         this.currentActivity = currentActivity;
     }
 
-    private Activity getCurrentActivity() {
+    public Activity getCurrentActivity() {
         if (parent != null) return parent.currentActivity;
 
         return currentActivity;
@@ -556,7 +655,6 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
     }
 
     private boolean isSeriousException(Thread from, Throwable t) {
-        if (true) return true;
         if (t == null) return false;
         if (from == null) return true /* because t != null */;
 
@@ -579,5 +677,9 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
     @Override
     public List<IClientThread> getActiveConnections() {
         return activeConnections;
+    }
+
+    public String getUsername() {
+        return username;
     }
 }
