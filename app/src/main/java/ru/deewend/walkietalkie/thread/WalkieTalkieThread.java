@@ -48,6 +48,8 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
         public void run() {
             boolean shouldNotReport = false;
             try (Socket socket = this.socket) {
+                socket.setTcpNoDelay(true);
+
                 DataInputStream inputStream = new DataInputStream(socket.getInputStream());
                 DataOutputStream outputStream =
                         (this.outputStream = new DataOutputStream(socket.getOutputStream()));
@@ -177,6 +179,7 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
     /* package-private */ final InterruptibleResourceHolder<ServerSocket> voiceServerSocket;
     /* package-private */ final List<IClientThread> activeConnections;
     /* package-private */ final Map<String, byte[]> voiceServerPasswordMap;
+    private volatile WalkieTalkieThread child;
 
     //================================================================================
     // MODE_CONNECT
@@ -188,6 +191,7 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
     private final InterruptibleResourceHolder<Socket> voiceServerConnectionSocket;
 
     private volatile DataOutputStream mainServerOutputStream;
+    private volatile DataInputStream voiceServerInputStream;
     private volatile DataOutputStream voiceServerOutputStream;
     private volatile boolean isReady;
 
@@ -231,7 +235,8 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
     }
 
     private void connect() throws Exception {
-        InetAddress hostAddress = findHostAddress();
+        InetAddress hostAddress = InetAddress.getByName("192.168.1.216");//findHostAddress();
+        //hostAddress = findHostAddress();
         if (hostAddress == null) {
             throw new IOException("Не удалось найти комнату в этой сети");
         }
@@ -279,10 +284,10 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
             voiceServerConnectionSocket.connect(
                     new InetSocketAddress(hostAddress, Helper.VOICE_SERVER_PORT));
 
-            DataInputStream voiceServerInputStream =
-                    new DataInputStream(voiceServerConnectionSocket.getInputStream());
-            DataOutputStream voiceServerOutputStream =
-                    new DataOutputStream(voiceServerConnectionSocket.getOutputStream());
+            DataInputStream voiceServerInputStream = (this.voiceServerInputStream =
+                    new DataInputStream(voiceServerConnectionSocket.getInputStream()));
+            DataOutputStream voiceServerOutputStream = (this.voiceServerOutputStream =
+                    new DataOutputStream(voiceServerConnectionSocket.getOutputStream()));
 
             // handshaking
             voiceServerOutputStream.writeInt(0xB01DFACE);
@@ -400,7 +405,7 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
             voiceServerThread = new VoiceServerThread(this);
             voiceServerThread.start();
             new MulticastServerThread(this).start();
-            new WalkieTalkieThread(this).start();
+            (child = new WalkieTalkieThread(this)).start();
 
             while (true) {
                 Socket socket = serverSocket.accept();
@@ -435,7 +440,7 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
         }
     }
 
-    /* package-private */ void notifyComponentShutdown(Thread thread, Throwable cause) {
+    public void notifyComponentShutdown(Thread thread, Throwable cause) {
         if (parent != null) {
             parent.notifyComponentShutdown(thread, cause);
 
@@ -498,9 +503,29 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
             if (activity instanceof MainActivity) {
                 ((MainActivity) activity).changeStateRecursive(true);
             } else {
+                System.out.println("SOMETHING SERIOUS!!!!!!!!!!");
                 Helper.startActivity(activity, MainActivity.class);
             }
         });
+    }
+
+    public DataInputStream getVoiceServerInputStream() {
+        return (child != null ? child : this).voiceServerInputStream;
+    }
+
+    public DataOutputStream getVoiceServerOutputStream() {
+        return (child != null ? child : this).voiceServerOutputStream;
+    }
+
+    public void setActivity(Activity currentActivity) {
+        if (parent != null) {
+            parent.setActivity(currentActivity);
+
+            return;
+        }
+        Helper.checkOnUIThread();
+
+        this.currentActivity = currentActivity;
     }
 
     private Activity getCurrentActivity() {
@@ -531,6 +556,7 @@ public class WalkieTalkieThread extends Thread implements IServerThread {
     }
 
     private boolean isSeriousException(Thread from, Throwable t) {
+        if (true) return true;
         if (t == null) return false;
         if (from == null) return true /* because t != null */;
 

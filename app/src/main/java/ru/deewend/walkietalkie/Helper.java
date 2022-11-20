@@ -27,6 +27,12 @@ public class Helper {
     private Helper() {
     }
 
+    public static void checkOnUIThread() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            throw new RuntimeException("The method requires to be executed from UI thread!");
+        }
+    }
+
     public static void scheduleUITask(Runnable task) {
         Objects.requireNonNull(task);
 
@@ -35,10 +41,19 @@ public class Helper {
         else                                 task.run();
     }
 
+    public static boolean isInsideCircle(
+            float x, float y, float circleX, float circleY, float radius
+    ) {
+        float dX = (x - circleX);
+        float dY = (y - circleY);
+
+        return Math.pow(dX, 2) + Math.pow(dY, 2) <= Math.pow(radius, 2);
+    }
+
     public static void startActivity(Activity from, Class<? extends Activity> clazz) {
         Intent intent = new Intent(from, clazz);
         from.startActivity(intent);
-        from.overridePendingTransition(0, 0);
+        //from.overridePendingTransition(0, 0);
     }
 
     @SuppressWarnings("InfiniteLoopStatement")
@@ -53,10 +68,9 @@ public class Helper {
             int available = inputStream.available();
             byte[] packet = new byte[1 + available];
             packet[0] = first;
-            int read = inputStream.read(packet, 1, available);
-            if (read != available) { // should never happen
-                throw new RuntimeException("read != available");
-            }
+            //noinspection ResultOfMethodCallIgnored
+            inputStream.read(packet, 1, available);
+            Log.w("Some server", "Received packet for broadcasting!");
 
             //noinspection SynchronizationOnLocalVariableOrMethodParameter
             synchronized (parent) {

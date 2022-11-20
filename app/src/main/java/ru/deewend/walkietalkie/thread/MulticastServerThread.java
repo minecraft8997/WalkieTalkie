@@ -6,7 +6,10 @@ import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.MulticastSocket;
+import java.net.NetworkInterface;
+import java.util.Enumeration;
 
 import ru.deewend.walkietalkie.Helper;
 
@@ -27,8 +30,20 @@ public class MulticastServerThread extends Thread {
         try (MulticastSocket multicastSocket =
                      (parent.multicastSocket.set(new MulticastSocket(Helper.MULTICAST_PORT)))
         ) {
-            InetAddress address = InetAddress.getByName(Helper.MULTICAST_ADDRESS);
-            multicastSocket.joinGroup(address);
+            InetAddress group = InetAddress.getByName(Helper.MULTICAST_ADDRESS);
+
+            NetworkInterface networkInterface = null;
+            Enumeration<NetworkInterface> enumeration = NetworkInterface.getNetworkInterfaces();
+            while (enumeration.hasMoreElements()) {
+                networkInterface = enumeration.nextElement();
+                if (networkInterface.getName().equals("eth0")) break;
+            }
+            if (networkInterface == null) {
+                throw new RuntimeException("Не удалось найти ни одного сетевого интерфейса");
+            }
+
+            multicastSocket.joinGroup(
+                    new InetSocketAddress(group, Helper.MULTICAST_PORT), networkInterface);
 
             byte[] buffer = new byte[1];
             while (true) {

@@ -1,21 +1,50 @@
 package ru.deewend.walkietalkie;
 
-import androidx.appcompat.app.AppCompatActivity;
-
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
 
 import ru.deewend.walkietalkie.thread.WalkieTalkieThread;
 
 public class MainActivity extends AppCompatActivity {
+    private static final int REQUEST_RECORD_AUDIO_PERMISSION = 200;
+    private boolean connect;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
         setTitle("Главная");
         setContentView(R.layout.activity_main);
+        new Throwable().printStackTrace();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            String username = ((EditText) findViewById(R.id.username_edit_text))
+                    .getText().toString();
+            WalkieTalkieThread thread = new WalkieTalkieThread(
+                    (connect ? WalkieTalkieThread.MODE_CONNECT :
+                            WalkieTalkieThread.MODE_HOST_AND_CONNECT), username, this);
+            WalkieTalkie.getInstance().linkWTThread(thread);
+            thread.start();
+        } else {
+            Toast.makeText(this, "Приложению необходмы права " +
+                    "на использование микрофона для корректной работы", Toast.LENGTH_LONG).show();
+        }
     }
 
     public void onConnectButtonPressed(View view) {
@@ -29,13 +58,9 @@ public class MainActivity extends AppCompatActivity {
     private void onButtonPressed(boolean connect) {
         changeStateRecursive(false);
 
-        String username = ((EditText) findViewById(R.id.username_edit_text))
-                .getText().toString();
-        WalkieTalkieThread thread = new WalkieTalkieThread(
-                (connect ? WalkieTalkieThread.MODE_CONNECT :
-                        WalkieTalkieThread.MODE_HOST_AND_CONNECT), username, this);
-        WalkieTalkie.getInstance().linkWTThread(thread);
-        thread.start();
+        this.connect = connect;
+        ActivityCompat.requestPermissions(this,
+                new String[] { Manifest.permission.RECORD_AUDIO }, REQUEST_RECORD_AUDIO_PERMISSION);
     }
 
     public void changeStateRecursive(boolean enable) {
